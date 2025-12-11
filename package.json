@@ -3,13 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "deploy": "firebase deploy"
+    "start": "node server.js"    
   },
   "dependencies": {
-    "firebase-functions": "^4.7.0",
-    "firebase-admin": "^12.0.0" 
-  },
-  "engines": {
-    "node": "20" 
+    "polka": "^0.5.2"  
   }
 }
