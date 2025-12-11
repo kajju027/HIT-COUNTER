@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "start": "node server.js",
     "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "polka": "^1.0.0"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"
