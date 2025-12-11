@@ -1,8 +1,16 @@
+import { URL } from "url"; // Node.js এ এটি প্রয়োজন
+
+const FIREBASE_URL = process.env.FIREBASE_URL;
+
+// ----------------- Main Handler -----------------
+
 export default async function handler(request, response) {
-  const url = new URL(request.url, `http://${request.headers.host}`);
+  // request.headers.host Vercel এ কাজ করত। Polka-তে এটি URL অবজেক্ট থেকে নেওয়া যায়।
+  // তবে Vercel ফাংশনটি Node.js এর সাথে মানিয়ে চলার জন্য এটিকে ধরে রাখছি।
+  const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
   const origin = request.headers.origin || "*";
 
-  // CORS
+  // CORS Preflight
   if (request.method === "OPTIONS") {
     return sendCors(response, origin);
   }
@@ -32,6 +40,7 @@ export default async function handler(request, response) {
 
     const totalPath = `counters/${key}/total.json`;
     const uniquePath = `counters/${key}/unique.json`;
+    const updatedPath = `counters/${key}/updated_at.json`; // Firebase এ update করার জন্য
 
     const totalValue = (await firebaseGet(totalPath)) || 0;
     const uniqueValue = (await firebaseGet(uniquePath)) || 0;
@@ -41,22 +50,23 @@ export default async function handler(request, response) {
 
     await firebasePut(totalPath, newTotal);
     await firebasePut(uniquePath, newUnique);
-    await firebasePut(`counters/${key}/updated_at.json`, new Date().toISOString());
+    await firebasePut(updatedPath, new Date().toISOString());
 
     const data = await getCountsFirebase(key);
     return sendJSON(response, data, origin);
   }
 
-  response.send("Hit Counter API (Firebase + Vercel) ✔");
+  // রুট হ্যান্ডলিং
+  response.writeHead(200, { 'Content-Type': 'text/plain' });
+  response.end("Hit Counter API (Firebase + Render) ✔");
 }
 
 
-// ---------------- Firebase Helpers ----------------
-
-const FIREBASE_URL = "https://hit-counter-a4063-default-rtdb.firebaseio.com/";
+// ----------------- Firebase Helpers -----------------
 
 async function firebaseGet(path) {
   const res = await fetch(FIREBASE_URL + path);
+  if (!res.ok) return null;
   return res.json();
 }
 
@@ -85,31 +95,34 @@ async function getCountsFirebase(key) {
 }
 
 
-// ---------------- Utils ----------------
+// ---------------- Utils (Polka/Node.js Compatible) ----------------
 
+// Vercel-এর Express-like .status().end() এর বদলে Node.js-এর .writeHead() এবং .end() ব্যবহার করা হয়েছে
 function sendCors(response, origin) {
-  response.setHeader("Access-Control-Allow-Origin", origin);
-  response.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  response.setHeader("Access-Control-Max-Age", "86400");
-  return response.status(200).end();
+  const headers = {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+  };
+  response.writeHead(204, headers); // 204 No Content for preflight
+  response.end();
 }
 
+// Vercel-এর Express-like .status().json() এর বদলে Node.js-এর .writeHead() এবং .end(JSON.stringify) ব্যবহার করা হয়েছে
 function sendJSON(response, data, origin) {
-  response.setHeader("Content-Type", "application/json");
-  response.setHeader("Access-Control-Allow-Origin", origin);
-  response.setHeader("Vary", "Origin");
-  return response.status(200).json(data);
+  const headers = {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": origin,
+    "Vary": "Origin",
+  };
+  response.writeHead(200, headers);
+  response.end(JSON.stringify(data));
 }
 
 function formatNum(n) {
-  if (n < 1000) return String(n);
-  const units = ["K", "M", "B", "T"];
-  let unit = -1;
-  let num = n;
-  while (num >= 1000 && unit < units.length - 1) {
-    num /= 1000;
-    unit++;
-  }
-  return `${Math.round(num * 10) / 10}${units[unit]}`;
+  if (n < 1000) return n.toString();
+  if (n < 10000) return (n / 1000).toFixed(1) + "k";
+  if (n < 1000000) return Math.round(n / 1000) + "k";
+  return (n / 1000000).toFixed(1) + "m";
 }
