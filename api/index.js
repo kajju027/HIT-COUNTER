@@ -1,29 +1,33 @@
-// api/index.js
-
 import { URL } from "url";
 
-// FIREBASE_URL Render-এর এনভায়রনমেন্ট ভেরিয়েবল থেকে আসবে
-const FIREBASE_URL = process.env.FIREBASE_URL;
-
-// ----------------- Main Handler -----------------
+const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL;
+const FIREBASE_SECRET_TOKEN = process.env.FIREBASE_SECRET_TOKEN;
 
 export default async function handler(request, response) {
-  // request.headers.host সঠিকভাবে URL তৈরি করতে সাহায্য করে
-  const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+  if (!FIREBASE_DATABASE_URL || !FIREBASE_SECRET_TOKEN) {
+    return sendJSON(
+      response,
+      { error: "Firebase Secret or URL is missing in Render Environment Variables." },
+      "*",
+      500
+    );
+  }
+
+  const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
   const origin = request.headers.origin || "*";
 
-  // CORS Preflight হ্যান্ডলিং
   if (request.method === "OPTIONS") {
     return sendCors(response, origin);
   }
 
   const key = url.searchParams.get("key") || "default";
   const uniqueMode = url.searchParams.get("unique") === "1";
-  
-  // IP Address নির্ণয় (Render এর জন্য 'x-real-ip' বা 'x-forwarded-for' ব্যবহার করে)
-  const ip = request.headers["x-real-ip"] ||
-             request.headers["x-forwarded-for"] ||
-             "0.0.0.0";
+
+  const ip =
+    request.headers["x-real-ip"] ||
+    request.headers["x-forwarded-for"] ||
+    "0.0.0.0";
+  const safeIp = ip.replace(/\./g, "_");
 
   if (url.pathname.startsWith("/api/get")) {
     const data = await getCountsFirebase(key);
@@ -31,57 +35,79 @@ export default async function handler(request, response) {
   }
 
   if (url.pathname.startsWith("/api/hit")) {
-    
+    const rateLimitPath = `rate_limits/${key}/${safeIp}.json`;
+    const lastHitTime = await firebaseGet(rateLimitPath);
+    const currentTime = Date.now();
+    const FIVE_MINUTES_MS = 5 * 60 * 1000;
+
+    if (lastHitTime && currentTime - lastHitTime < FIVE_MINUTES_MS) {
+      const data = await getCountsFirebase(key);
+      response.setHeader("X-RateLimit-Blocked", "true");
+      return sendJSON(response, data, origin, 429);
+    }
+
+    await firebasePut(rateLimitPath, currentTime);
+
     let uniqueInc = 1;
     if (uniqueMode) {
       const day = new Date().toISOString().slice(0, 10);
-      const ipKey = `unique/${key}/${day}/${ip}.json`;
-
-      const exists = await firebaseGet(ipKey);
+      const uniquePath = `unique/${key}/${day}/${safeIp}.json`;
+      const exists = await firebaseGet(uniquePath);
       if (exists) uniqueInc = 0;
-      else await firebasePut(ipKey, true);
+      else await firebasePut(uniquePath, true);
     }
 
     const totalPath = `counters/${key}/total.json`;
-    const uniquePath = `counters/${key}/unique.json`;
-    const updatedPath = `counters/${key}/updated_at.json`; 
+    const uniqueCountPath = `counters/${key}/unique.json`;
+    const updatedPath = `counters/${key}/updated_at.json`;
 
     const totalValue = (await firebaseGet(totalPath)) || 0;
-    const uniqueValue = (await firebaseGet(uniquePath)) || 0;
+    const uniqueValue = (await firebaseGet(uniqueCountPath)) || 0;
 
     const newTotal = totalValue + 1;
     const newUnique = uniqueValue + uniqueInc;
 
     await firebasePut(totalPath, newTotal);
-    await firebasePut(uniquePath, newUnique);
+    await firebasePut(uniqueCountPath, newUnique);
     await firebasePut(updatedPath, new Date().toISOString());
 
     const data = await getCountsFirebase(key);
     return sendJSON(response, data, origin);
   }
 
-  // রুট হ্যান্ডলিং
-  response.writeHead(200, { 'Content-Type': 'text/plain' });
-  response.end("Hit Counter API (Firebase + Render) ✔");
+  response.writeHead(200, { "Content-Type": "text/plain" });
+  response.end("Hit Counter API is running on Render!");
 }
 
-
-// ----------------- Firebase Helpers -----------------
-
 async function firebaseGet(path) {
-  const res = await fetch(FIREBASE_URL + path);
-  if (!res.ok) return null;
-  const text = await res.text();
-  // Firebase-এ ডেটা না থাকলে response টেক্সট "null" আসে
-  return text === 'null' ? null : JSON.parse(text);
+  const authQuery = `?auth=${FIREBASE_SECRET_TOKEN}`;
+  const url =
+    FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path + authQuery;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text === "null" ? null : JSON.parse(text);
+  } catch (e) {
+    throw e;
+  }
 }
 
 async function firebasePut(path, value) {
-  await fetch(FIREBASE_URL + path, {
+  const authQuery = `?auth=${FIREBASE_SECRET_TOKEN}`;
+  const url =
+    FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path + authQuery;
+
+  const res = await fetch(url, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(value),
   });
+
+  if (!res.ok) {
+    throw new Error(`Firebase PUT failed with status ${res.status}`);
+  }
 }
 
 async function getCountsFirebase(key) {
@@ -100,35 +126,28 @@ async function getCountsFirebase(key) {
   };
 }
 
-
-// ---------------- Utils (Node.js/Polka Compatible) ----------------
-
-// Node.js এর response অবজেক্ট ব্যবহার করে CORS হেডার সেট করা
 function sendCors(response, origin) {
-  const headers = {
+  response.writeHead(204, {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
-  };
-  response.writeHead(204, headers); 
+  });
   response.end();
 }
 
-// JSON ডেটা পাঠানো
-function sendJSON(response, data, origin) {
-  const headers = {
+function sendJSON(response, data, origin, status = 200) {
+  response.writeHead(status, {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": origin,
-    "Vary": "Origin",
-  };
-  response.writeHead(200, headers);
+    Vary: "Origin",
+  });
   response.end(JSON.stringify(data));
 }
 
 function formatNum(n) {
   if (n < 1000) return n.toString();
-  if (n < 10000) return (n / 1000).toFixed(1) + "k";
-  if (n < 1000000) return Math.round(n / 1000) + "k";
-  return (n / 1000000).toFixed(1) + "m";
+  if (n < 10000) return (n / 1000).toFixed(1) + "K";
+  if (n < 1000000) return Math.round(n / 1000) + "K";
+  return (n / 1000000).toFixed(1) + "Mi";
 }
