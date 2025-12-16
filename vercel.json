@@ -4,12 +4,6 @@
       "NODE_VERSION": "20"
     }
   },
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/index.js"
-    }
-  ],
   "redirects": [
     {
       "source": "/favicon.ico",
