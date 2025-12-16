@@ -1,13 +1,6 @@
 {
-  "name": "hit-counter",
+  "name": "sayancount-one",
   "version": "1.0.0",
   "type": "module",
-  "license": "MIT",
-  "scripts": {
-    "start": "node server.js"    
-  },
-  "dependencies": {
-    "polka": "^0.5.2"  
-  }
+  "license": "MIT"
 }
-
