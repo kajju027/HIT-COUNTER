@@ -13,8 +13,7 @@
   "redirects": [
     {
       "source": "/favicon.ico",
-      "destination": "/404",
-      "status": 404
+      "destination": "/404"
     }
   ],
   "headers": [
