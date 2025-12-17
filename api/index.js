@@ -3,11 +3,43 @@ import { URL } from "url";
 const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL;
 const FIREBASE_SECRET_TOKEN = process.env.FIREBASE_SECRET_TOKEN;
 
+// মেমোরি ক্যাশিং স্টোরেজ
+const cacheStore = new Map();
+const CACHE_TTL_MS = 60 * 1000; // 60 সেকেন্ডের জন্য ক্যাশ
+
+// বট এবং রেফারের জন্য লজিক (আপনার দেওয়া তালিকা এখানে যুক্ত করতে হবে)
+const BOT_USER_AGENTS = [
+    "bot",
+    "crawl",
+    "spider",
+    "archiver",
+    "facebookexternalhit",
+    "googlebot",
+    "yandex",
+    "bingbot",
+];
+
+// আপনার অনুমতিপ্রাপ্ত ডোমেনগুলি এখানে যুক্ত করুন
+const ALLOWED_REFERERS = [
+    // উদাহরণ: "https://yourblog.com",
+    // উদাহরণ: "https://anothersite.net",
+    "https://localhost:3000", 
+    "https://sayancounter-two.vercel.app"
+];
+
 function handleCriticalError(response, message) {
   return sendJSON(response, { error: message }, "*", 500);
 }
 
 export default async function handler(request, response) {
+  const userAgent = request.headers["user-agent"] || "";
+  const isBot = BOT_USER_AGENTS.some(agent => userAgent.toLowerCase().includes(agent));
+
+  if (isBot) {
+    response.setHeader("X-Bot-Blocked", "true");
+    return sendJSON(response, { error: "Bot traffic blocked." }, "*", 403);
+  }
+
   if (!FIREBASE_DATABASE_URL || !FIREBASE_SECRET_TOKEN) {
     return handleCriticalError(
       response,
@@ -21,20 +53,47 @@ export default async function handler(request, response) {
   if (request.method === "OPTIONS") {
     return sendCors(response, origin);
   }
+  
+  const referer = request.headers.referer || request.headers.host || "";
+  const isAllowed = ALLOWED_REFERERS.length === 0 || ALLOWED_REFERERS.some(allowed => referer.includes(allowed));
+
+  if (!isAllowed) {
+    response.setHeader("X-Referer-Blocked", "true");
+    return sendJSON(response, { error: "Referer not allowed." }, origin, 403);
+  }
 
   const key = url.searchParams.get("key") || "default";
   const uniqueMode = url.searchParams.get("unique") === "1";
-
+  
   const ip =
     request.headers["x-real-ip"] ||
     request.headers["x-forwarded-for"]?.split(',')[0].trim() ||
     "0.0.0.0";
   const safeIp = ip.replace(/\./g, "_");
-
+  
+  // ক্যাশিং লজিক শুরু: GET রিকোয়েস্টের জন্য
   if (url.pathname.startsWith("/api/get")) {
+    const cacheKey = `counts:${key}`;
+    const cachedData = cacheStore.get(cacheKey);
+    const currentTime = Date.now();
+
+    if (cachedData && currentTime < cachedData.expires) {
+      response.setHeader("X-Cache", "HIT");
+      return sendJSON(response, cachedData.data, origin);
+    }
+
     const data = await getCountsFirebase(key);
+    
+    // ক্যাশে নতুন ডেটা সেভ করা
+    cacheStore.set(cacheKey, {
+      data: data,
+      expires: currentTime + CACHE_TTL_MS,
+    });
+    
+    response.setHeader("X-Cache", "MISS");
     return sendJSON(response, data, origin);
   }
+  // ক্যাশিং লজিক শেষ
 
   if (url.pathname.startsWith("/api/hit")) {
     const rateLimitPath = `rate_limits/${key}/${safeIp}.json`;
@@ -83,6 +142,16 @@ export default async function handler(request, response) {
       await firebasePut(totalPath, newTotal);
       await firebasePut(uniqueCountPath, newUnique);
       await firebasePut(updatedPath, new Date().toISOString());
+      
+      // হিট বাড়ানোর পর ক্যাশে আপডেট করা
+      const cacheKey = `counts:${key}`;
+      const newData = await getCountsFirebase(key);
+      cacheStore.set(cacheKey, {
+        data: newData,
+        expires: currentTime + CACHE_TTL_MS,
+      });
+      // ক্যাশে আপডেট শেষ
+
     } catch (e) {
       return handleCriticalError(response, "Failed to increment hit counter in Firebase.");
     }
@@ -92,7 +161,7 @@ export default async function handler(request, response) {
   }
 
   response.writeHead(200, { "Content-Type": "text/plain" });
-  response.end("Hit Counter API is running on Vercel!");
+  response.end("Hit Counter API is running!");
 }
 
 async function firebaseGet(path) {
@@ -181,3 +250,4 @@ function formatNum(n) {
   if (n < 1000000) return Math.round(n / 1000) + "K";
   return (n / 1000000).toFixed(1) + "M";
 }
+
