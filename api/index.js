@@ -3,9 +3,6 @@ import { URL } from "url";
 const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL;
 const FIREBASE_SECRET_TOKEN = process.env.FIREBASE_SECRET_TOKEN;
 
-const cacheStore = new Map();
-const CACHE_TTL_MS = 60 * 1000;
-
 function handleCriticalError(response, message) {
   return sendJSON(response, { error: message }, "*", 500);
 }
@@ -27,31 +24,15 @@ export default async function handler(request, response) {
 
   const key = url.searchParams.get("key") || "default";
   const uniqueMode = url.searchParams.get("unique") === "1";
-  
+
   const ip =
     request.headers["x-real-ip"] ||
     request.headers["x-forwarded-for"]?.split(',')[0].trim() ||
     "0.0.0.0";
   const safeIp = ip.replace(/\./g, "_");
-  
+
   if (url.pathname.startsWith("/api/get")) {
-    const cacheKey = `counts:${key}`;
-    const cachedData = cacheStore.get(cacheKey);
-    const currentTime = Date.now();
-
-    if (cachedData && currentTime < cachedData.expires) {
-      response.setHeader("X-Cache", "HIT");
-      return sendJSON(response, cachedData.data, origin);
-    }
-
     const data = await getCountsFirebase(key);
-    
-    cacheStore.set(cacheKey, {
-      data: data,
-      expires: currentTime + CACHE_TTL_MS,
-    });
-    
-    response.setHeader("X-Cache", "MISS");
     return sendJSON(response, data, origin);
   }
 
@@ -102,14 +83,6 @@ export default async function handler(request, response) {
       await firebasePut(totalPath, newTotal);
       await firebasePut(uniqueCountPath, newUnique);
       await firebasePut(updatedPath, new Date().toISOString());
-      
-      const cacheKey = `counts:${key}`;
-      const newData = await getCountsFirebase(key);
-      cacheStore.set(cacheKey, {
-        data: newData,
-        expires: currentTime + CACHE_TTL_MS,
-      });
-
     } catch (e) {
       return handleCriticalError(response, "Failed to increment hit counter in Firebase.");
     }
@@ -119,7 +92,7 @@ export default async function handler(request, response) {
   }
 
   response.writeHead(200, { "Content-Type": "text/plain" });
-  response.end("Hit Counter API is running!");
+  response.end("Hit Counter API is running on Vercel!");
 }
 
 async function firebaseGet(path) {
@@ -208,4 +181,3 @@ function formatNum(n) {
   if (n < 1000000) return Math.round(n / 1000) + "K";
   return (n / 1000000).toFixed(1) + "M";
 }
-
