@@ -1,6 +1,9 @@
 {
-  "name": "sayancount-one",
+  "name": "sayancounter-two",
   "version": "1.0.0",
   "type": "module",
-  "license": "MIT"
+  "dependencies": {
+    "url": "^0.11.3"
+  }
 }
+
